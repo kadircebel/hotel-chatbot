@@ -1,347 +1,266 @@
-import 'server-only';
+import clientPromise from './mongodb';
+import { Document } from 'mongodb';
 
-import { genSaltSync, hashSync } from 'bcrypt-ts';
-import { and, asc, desc, eq, gt, gte, inArray } from 'drizzle-orm';
-import { drizzle } from 'drizzle-orm/postgres-js';
-import postgres from 'postgres';
-
-import {
-  user,
-  chat,
-  type User,
-  document,
-  type Suggestion,
-  suggestion,
-  type Message,
-  message,
-  vote,
-} from './schema';
-import { ArtifactKind } from '@/components/artifact';
-
-// Optionally, if not using email/pass login, you can
-// use the Drizzle adapter for Auth.js / NextAuth
-// https://authjs.dev/reference/adapter/drizzle
-
-// biome-ignore lint: Forbidden non-null assertion.
-const client = postgres(process.env.POSTGRES_URL!);
-const db = drizzle(client);
-
-export async function getUser(email: string): Promise<Array<User>> {
-  try {
-    return await db.select().from(user).where(eq(user.email, email));
-  } catch (error) {
-    console.error('Failed to get user from database');
-    throw error;
-  }
+// Stok ile ilgili tipler
+interface StockCode {
+  _id: string;
+  itemName: string;
 }
 
-export async function createUser(email: string, password: string) {
-  const salt = genSaltSync(10);
-  const hash = hashSync(password, salt);
-
-  try {
-    return await db.insert(user).values({ email, password: hash });
-  } catch (error) {
-    console.error('Failed to create user in database');
-    throw error;
-  }
+interface ItemDetails {
+  stockCode: string;
+  itemName: string;
+  category: string;
+  alternatives: string[];
 }
 
-export async function saveChat({
-  id,
-  userId,
-  title,
-}: {
-  id: string;
-  userId: string;
+// Kullanıcı tipi
+interface User extends Document {
+  _id: string;
+  email: string;
+  password: string;
+}
+
+// Chat ve Message tipleri
+interface Chat extends Document {
+  _id: string;
+  createdAt: string;
   title: string;
-}) {
-  try {
-    return await db.insert(chat).values({
-      id,
-      createdAt: new Date(),
-      userId,
-      title,
-    });
-  } catch (error) {
-    console.error('Failed to save chat in database');
-    throw error;
-  }
+  userId: string;
+  visibility: 'public' | 'private';
 }
 
-export async function deleteChatById({ id }: { id: string }) {
-  try {
-    await db.delete(vote).where(eq(vote.chatId, id));
-    await db.delete(message).where(eq(message.chatId, id));
-
-    return await db.delete(chat).where(eq(chat.id, id));
-  } catch (error) {
-    console.error('Failed to delete chat by id from database');
-    throw error;
-  }
+interface Message extends Document {
+  _id: string;
+  chatId: string;
+  role: string;
+  content: string;
+  createdAt: string;
 }
 
-export async function getChatsByUserId({ id }: { id: string }) {
-  try {
-    return await db
-      .select()
-      .from(chat)
-      .where(eq(chat.userId, id))
-      .orderBy(desc(chat.createdAt));
-  } catch (error) {
-    console.error('Failed to get chats by user from database');
-    throw error;
-  }
-}
-
-export async function getChatById({ id }: { id: string }) {
-  try {
-    const [selectedChat] = await db.select().from(chat).where(eq(chat.id, id));
-    return selectedChat;
-  } catch (error) {
-    console.error('Failed to get chat by id from database');
-    throw error;
-  }
-}
-
-export async function saveMessages({ messages }: { messages: Array<Message> }) {
-  try {
-    return await db.insert(message).values(messages);
-  } catch (error) {
-    console.error('Failed to save messages in database', error);
-    throw error;
-  }
-}
-
-export async function getMessagesByChatId({ id }: { id: string }) {
-  try {
-    return await db
-      .select()
-      .from(message)
-      .where(eq(message.chatId, id))
-      .orderBy(asc(message.createdAt));
-  } catch (error) {
-    console.error('Failed to get messages by chat id from database', error);
-    throw error;
-  }
-}
-
-export async function voteMessage({
-  chatId,
-  messageId,
-  type,
-}: {
+// Vote tipi
+interface Vote extends Document {
+  _id: string;
   chatId: string;
   messageId: string;
-  type: 'up' | 'down';
-}) {
-  try {
-    const [existingVote] = await db
-      .select()
-      .from(vote)
-      .where(and(eq(vote.messageId, messageId)));
-
-    if (existingVote) {
-      return await db
-        .update(vote)
-        .set({ isUpvoted: type === 'up' })
-        .where(and(eq(vote.messageId, messageId), eq(vote.chatId, chatId)));
-    }
-    return await db.insert(vote).values({
-      chatId,
-      messageId,
-      isUpvoted: type === 'up',
-    });
-  } catch (error) {
-    console.error('Failed to upvote message in database', error);
-    throw error;
-  }
+  isUpvoted: boolean;
 }
 
-export async function getVotesByChatId({ id }: { id: string }) {
-  try {
-    return await db.select().from(vote).where(eq(vote.chatId, id));
-  } catch (error) {
-    console.error('Failed to get votes by chat id from database', error);
-    throw error;
-  }
-}
-
-export async function saveDocument({
-  id,
-  title,
-  kind,
-  content,
-  userId,
-}: {
-  id: string;
-  title: string;
-  kind: ArtifactKind;
-  content: string;
-  userId: string;
-}) {
-  try {
-    return await db.insert(document).values({
-      id,
-      title,
-      kind,
-      content,
-      userId,
-      createdAt: new Date(),
-    });
-  } catch (error) {
-    console.error('Failed to save document in database');
-    throw error;
-  }
-}
-
-export async function getDocumentsById({ id }: { id: string }) {
-  try {
-    const documents = await db
-      .select()
-      .from(document)
-      .where(eq(document.id, id))
-      .orderBy(asc(document.createdAt));
-
-    return documents;
-  } catch (error) {
-    console.error('Failed to get document by id from database');
-    throw error;
-  }
-}
-
-export async function getDocumentById({ id }: { id: string }) {
-  try {
-    const [selectedDocument] = await db
-      .select()
-      .from(document)
-      .where(eq(document.id, id))
-      .orderBy(desc(document.createdAt));
-
-    return selectedDocument;
-  } catch (error) {
-    console.error('Failed to get document by id from database');
-    throw error;
-  }
-}
-
-export async function deleteDocumentsByIdAfterTimestamp({
-  id,
-  timestamp,
-}: {
-  id: string;
-  timestamp: Date;
-}) {
-  try {
-    await db
-      .delete(suggestion)
-      .where(
-        and(
-          eq(suggestion.documentId, id),
-          gt(suggestion.documentCreatedAt, timestamp),
-        ),
-      );
-
-    return await db
-      .delete(document)
-      .where(and(eq(document.id, id), gt(document.createdAt, timestamp)));
-  } catch (error) {
-    console.error(
-      'Failed to delete documents by id after timestamp from database',
-    );
-    throw error;
-  }
-}
-
-export async function saveSuggestions({
-  suggestions,
-}: {
-  suggestions: Array<Suggestion>;
-}) {
-  try {
-    return await db.insert(suggestion).values(suggestions);
-  } catch (error) {
-    console.error('Failed to save suggestions in database');
-    throw error;
-  }
-}
-
-export async function getSuggestionsByDocumentId({
-  documentId,
-}: {
+// Suggestion tipi
+interface Suggestion extends Document {
+  _id: string;
   documentId: string;
-}) {
-  try {
-    return await db
-      .select()
-      .from(suggestion)
-      .where(and(eq(suggestion.documentId, documentId)));
-  } catch (error) {
-    console.error(
-      'Failed to get suggestions by document version from database',
-    );
-    throw error;
-  }
+  originalText: string;
+  suggestedText: string;
+  description?: string;
+  isResolved: boolean;
+  userId: string;
+  createdAt: string;
 }
 
-export async function getMessageById({ id }: { id: string }) {
-  try {
-    return await db.select().from(message).where(eq(message.id, id));
-  } catch (error) {
-    console.error('Failed to get message by id from database');
-    throw error;
-  }
+
+function normalizeTurkishChars(str: string): string {
+  return str
+    .toLowerCase()
+    .replace(/ö/g, 'o')
+    .replace(/ü/g, 'u')
+    .replace(/ş/g, 's')
+    .replace(/ç/g, 'c')
+    .replace(/ğ/g, 'g')
+    .replace(/ı/g, 'i')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
-export async function deleteMessagesByChatIdAfterTimestamp({
-  chatId,
-  timestamp,
-}: {
-  chatId: string;
-  timestamp: Date;
-}) {
-  try {
-    const messagesToDelete = await db
-      .select({ id: message.id })
-      .from(message)
-      .where(
-        and(eq(message.chatId, chatId), gte(message.createdAt, timestamp)),
-      );
+export async function getStockCodesForCategory(categoryName: string): Promise<string> {
+  const client = await clientPromise;
+  const db = client.db('stockDb');
+  
+  // Normalize the category name
+  const normalizedCategory = normalizeTurkishChars(categoryName.trim());
+  
+  // Look for matching stocks for the category
+  const stocks = await db.collection('stock-codes').find({
+    category: { $regex: new RegExp(normalizedCategory, 'i') }
+  }).toArray();
 
-    const messageIds = messagesToDelete.map((message) => message.id);
-
-    if (messageIds.length > 0) {
-      await db
-        .delete(vote)
-        .where(
-          and(eq(vote.chatId, chatId), inArray(vote.messageId, messageIds)),
-        );
-
-      return await db
-        .delete(message)
-        .where(
-          and(eq(message.chatId, chatId), inArray(message.id, messageIds)),
-        );
+  let responseText = '';
+  
+  // Iterate through each stock and get its details
+  for (const stock of stocks) {
+    const details = await getItemDetails(stock.stockCode);
+    if (details) {
+      responseText += `${details.itemName} (Kod: ${details.stockCode}) - Alternatifler: ${details.alternatives.join(', ')}\n`;
     }
-  } catch (error) {
-    console.error(
-      'Failed to delete messages by id after timestamp from database',
-    );
-    throw error;
   }
+
+  return responseText;
 }
 
-export async function updateChatVisiblityById({
-  chatId,
-  visibility,
-}: {
-  chatId: string;
-  visibility: 'private' | 'public';
-}) {
-  try {
-    return await db.update(chat).set({ visibility }).where(eq(chat.id, chatId));
-  } catch (error) {
-    console.error('Failed to update chat visibility in database');
-    throw error;
-  }
+
+// export async function getStockCode(itemName: string): Promise<StockCode | null> {
+//   const client = await clientPromise;
+//   const db = client.db('stockDb');
+  
+//   // Check if it's a stock code first (e.g., FISH001)
+//   if (/^FISH\d+$/i.test(itemName)) {
+//     return await db.collection('stock-codes').findOne({ 
+//       stockCode: itemName.toUpperCase() 
+//     }) as StockCode | null;
+//   }
+  
+//   // Otherwise, search by normalized item name
+//   const normalizedItemName = normalizeTurkishChars(itemName.trim());
+  
+//   // Try exact match on itemName first
+//   let stock = await db.collection('stock-codes').findOne({
+//     itemName: { $regex: new RegExp(`^${normalizedItemName}$`, 'i') }
+//   });
+  
+//   // If no match, try partial match
+//   if (!stock) {
+//     stock = await db.collection('stock-codes').findOne({
+//       itemName: { $regex: new RegExp(normalizedItemName, 'i') }
+//     });
+//   }
+  
+//   return stock as StockCode | null;
+// }
+
+// export async function getFishTypes(question: string): Promise<StockCode[]> {
+//   // If the question is about fish types
+//   if (question.toLowerCase().includes('balık') && 
+//       (question.toLowerCase().includes('türleri') || 
+//        question.toLowerCase().includes('çeşitleri'))) {
+    
+//     // Get all fish
+//     return await getStockCodesForCategory('Balık');
+//   }
+  
+//   // If the question is about seafood types
+//   if ((question.toLowerCase().includes('deniz') && 
+//        question.toLowerCase().includes('ürünleri')) ||
+//       question.toLowerCase().includes('seafood')) {
+    
+//     // Get all seafood
+//     return await getStockCodesForCategory('Deniz Ürünleri');
+//   }
+  
+//   return [];
+// }
+
+
+// // Stok sorguları
+export async function getItemDetails(stockCode: string): Promise<ItemDetails | null> {
+  const client = await clientPromise;
+  const db = client.db('stockDb');
+  // const item = await db.collection('item-details').findOne({ stockCode });
+  const item = await db.collection('item-details').findOne({ 
+    stockCode: { $regex: new RegExp('^' + stockCode.toLowerCase(), 'i') }
+  });
+  console.log('item:', item);
+  return item as ItemDetails | null;
+}
+
+
+export async function getStockCode(itemName: string): Promise<StockCode | null> {
+  const client = await clientPromise;
+  const db = client.db('stockDb');
+  // const stock = await db.collection('stock-codes').findOne({ itemName });
+  const normalizedItemName = normalizeTurkishChars(itemName.toLowerCase());
+  const stock = await db.collection('stock-codes').findOne({
+    itemName: { $regex: new RegExp(normalizedItemName, 'i') }
+  });
+  
+  return stock as StockCode | null;
+}
+
+// Kullanıcı sorguları
+export async function createUser(email: string, password: string): Promise<User> {
+  const client = await clientPromise;
+  const db = client.db('stockDb');
+  const user: User = {
+    _id: new Date().toISOString(),
+    email,
+    password,
+  };
+  await db.collection<User>('users').insertOne(user);
+  return user;
+}
+
+export async function getUser(email: string): Promise<User | null> {
+  const client = await clientPromise;
+  const db = client.db('stockDb');
+  const user = await db.collection<User>('users').findOne({ email });
+  return user as User | null;
+}
+
+// Chat ve Mesaj sorguları
+export async function deleteMessagesByChatIdAfterTimestamp(chatId: string, timestamp: string): Promise<void> {
+  const client = await clientPromise;
+  const db = client.db('stockDb');
+  await db.collection<Message>('message').deleteMany({ chatId, createdAt: { $gt: timestamp } });
+}
+
+export async function getMessageById(messageId: string): Promise<Message | null> {
+  const client = await clientPromise;
+  const db = client.db('stockDb');
+  const message = await db.collection<Message>('message').findOne({ _id: messageId });
+  return message as Message | null;
+}
+
+export async function getMessagesByChatId({ id: chatId }: { id: string }): Promise<Message[]> {
+  const client = await clientPromise;
+  const db = client.db('stockDb');
+  const messages = await db.collection<Message>('message').find({ chatId }).toArray();
+  return messages;
+}
+
+export async function updateChatVisiblityById(chatId: string, visibility: 'public' | 'private'): Promise<void> {
+  const client = await clientPromise;
+  const db = client.db('stockDb');
+  await db.collection<Chat>('chat').updateOne({ _id: chatId }, { $set: { visibility } });
+}
+
+// Vote sorguları
+export async function getVotesByChatId({ id: chatId }: { id: string }): Promise<Vote[]> {
+  const client = await clientPromise;
+  const db = client.db('stockDb');
+  const votes = await db.collection<Vote>('vote').find({ chatId }).toArray();
+  return votes;
+}
+
+export async function voteMessage({ chatId, messageId, type }: { chatId: string; messageId: string; type: 'up' | 'down' }): Promise<void> {
+  const client = await clientPromise;
+  const db = client.db('stockDb');
+  const isUpvoted = type === 'up';
+  await db.collection<Vote>('vote').updateOne(
+    { chatId, messageId },
+    { $set: { isUpvoted, _id: `${chatId}-${messageId}` } },
+    { upsert: true }
+  );
+}
+
+// Chat geçmişini alma
+export async function getChatsByUserId({ id: userId }: { id: string }): Promise<Chat[]> {
+  const client = await clientPromise;
+  const db = client.db('stockDb');
+  const chats = await db.collection<Chat>('chat').find({ userId }).toArray();
+  return chats;
+}
+
+// Belirli bir chat’i ID’ye göre alma
+export async function getChatById({ id }: { id: string }): Promise<Chat | null> {
+  const client = await clientPromise;
+  const db = client.db('stockDb');
+  const chat = await db.collection<Chat>('chat').findOne({ _id: id });
+  return chat as Chat | null;
+}
+
+// Suggestion sorgusu
+export async function getSuggestionsByDocumentId(documentId: string): Promise<Suggestion[]> {
+  const client = await clientPromise;
+  const db = client.db('stockDb');
+  const suggestions = await db.collection<Suggestion>('suggestion').find({ documentId }).toArray();
+  return suggestions;
 }

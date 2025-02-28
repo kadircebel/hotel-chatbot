@@ -1,160 +1,107 @@
-import {
-  type Message,
-  createDataStreamResponse,
-  smoothStream,
-  streamText,
-} from 'ai';
+import { NextResponse } from 'next/server';
+import OpenAI from 'openai';
+import { getItemDetails, getStockCode } from '@/lib/db/queries';
 
-import { auth } from '@/app/(auth)/auth';
-import { myProvider } from '@/lib/ai/models';
-import { systemPrompt } from '@/lib/ai/prompts';
-import {
-  deleteChatById,
-  getChatById,
-  saveChat,
-  saveMessages,
-} from '@/lib/db/queries';
-import {
-  generateUUID,
-  getMostRecentUserMessage,
-  sanitizeResponseMessages,
-} from '@/lib/utils';
-
-import { generateTitleFromUserMessage } from '../../actions';
-import { createDocument } from '@/lib/ai/tools/create-document';
-import { updateDocument } from '@/lib/ai/tools/update-document';
-import { requestSuggestions } from '@/lib/ai/tools/request-suggestions';
-import { getWeather } from '@/lib/ai/tools/get-weather';
-
-export const maxDuration = 60;
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
 
 export async function POST(request: Request) {
-  const {
-    id,
-    messages,
-    selectedChatModel,
-  }: { id: string; messages: Array<Message>; selectedChatModel: string } =
-    await request.json();
-
-  const session = await auth();
-
-  if (!session || !session.user || !session.user.id) {
-    return new Response('Unauthorized', { status: 401 });
-  }
-
-  const userMessage = getMostRecentUserMessage(messages);
-
-  if (!userMessage) {
-    return new Response('No user message found', { status: 400 });
-  }
-
-  const chat = await getChatById({ id });
-
-  if (!chat) {
-    const title = await generateTitleFromUserMessage({ message: userMessage });
-    await saveChat({ id, userId: session.user.id, title });
-  }
-
-  await saveMessages({
-    messages: [{ ...userMessage, createdAt: new Date(), chatId: id }],
-  });
-
-  return createDataStreamResponse({
-    execute: (dataStream) => {
-      const result = streamText({
-        model: myProvider.languageModel(selectedChatModel),
-        system: systemPrompt({ selectedChatModel }),
-        messages,
-        maxSteps: 5,
-        experimental_activeTools:
-          selectedChatModel === 'chat-model-reasoning'
-            ? []
-            : [
-                'getWeather',
-                'createDocument',
-                'updateDocument',
-                'requestSuggestions',
-              ],
-        experimental_transform: smoothStream({ chunking: 'word' }),
-        experimental_generateMessageId: generateUUID,
-        tools: {
-          getWeather,
-          createDocument: createDocument({ session, dataStream }),
-          updateDocument: updateDocument({ session, dataStream }),
-          requestSuggestions: requestSuggestions({
-            session,
-            dataStream,
-          }),
-        },
-        onFinish: async ({ response, reasoning }) => {
-          if (session.user?.id) {
-            try {
-              const sanitizedResponseMessages = sanitizeResponseMessages({
-                messages: response.messages,
-                reasoning,
-              });
-
-              await saveMessages({
-                messages: sanitizedResponseMessages.map((message) => {
-                  return {
-                    id: message.id,
-                    chatId: id,
-                    role: message.role,
-                    content: message.content,
-                    createdAt: new Date(),
-                  };
-                }),
-              });
-            } catch (error) {
-              console.error('Failed to save chat');
-            }
-          }
-        },
-        experimental_telemetry: {
-          isEnabled: true,
-          functionId: 'stream-text',
-        },
-      });
-
-      result.consumeStream();
-
-      result.mergeIntoDataStream(dataStream, {
-        sendReasoning: true,
-      });
-    },
-    onError: () => {
-      return 'Oops, an error occured!';
-    },
-  });
-}
-
-export async function DELETE(request: Request) {
-  const { searchParams } = new URL(request.url);
-  const id = searchParams.get('id');
-
-  if (!id) {
-    return new Response('Not Found', { status: 404 });
-  }
-
-  const session = await auth();
-
-  if (!session || !session.user) {
-    return new Response('Unauthorized', { status: 401 });
-  }
-
   try {
-    const chat = await getChatById({ id });
+    const body = await request.json();
+    // console.log('Gelen istek gövdesi:', body);
 
-    if (chat.userId !== session.user.id) {
-      return new Response('Unauthorized', { status: 401 });
+    let message: string | undefined;
+    if (body.messages && Array.isArray(body.messages)) {
+      const lastMessage = body.messages.findLast((msg: any) => msg.role === 'user');
+      message = lastMessage?.content;
+    } else if (typeof body === 'string') {
+      message = body;
+    } else if (body.message && typeof body.message === 'string') {
+      message = body.message;
+    } else if (body.content && typeof body.content === 'string') {
+      message = body.content;
     }
 
-    await deleteChatById({ id });
+    console.log("Kullanıcıdan gelen mesaj:", message);
 
-    return new Response('Chat deleted', { status: 200 });
+    if (!message || typeof message !== 'string') {
+      console.error('Geçersiz gövde:', body);
+      return NextResponse.json({ error: 'Mesaj eksik veya geçersiz' }, { status: 400 });
+    }
+    
+    const itemMatch = message.match(/(\w+)/);
+
+    let responseText = '';
+
+    if (itemMatch) {
+      const itemName = itemMatch[0];
+      const stock = await getStockCode(itemName);
+
+      if (stock) {
+        const details = await getItemDetails(stock._id);
+        if (details) {
+          responseText = `${details.itemName} (Kod: ${details.stockCode}) - Alternatifler: ${details.alternatives.join(', ')}`;
+        } else {
+          responseText = `${itemName} için detay bulunamadı.`;
+        }
+      } else {
+        responseText = `${itemName} adında bir stok bulunamadı. Başka bir şey sorabilir misiniz?`;
+      }
+
+      const stream = new ReadableStream({
+        start(controller) {
+          const response = {
+            id: Date.now().toString(),
+            role: 'assistant',
+            content: responseText,
+          };
+          controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(response)}\n\n`));
+          controller.close();
+        },
+      });
+
+      return new NextResponse(stream, {
+        headers: {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+        },
+      });
+    } else {
+      const completion = await openai.chat.completions.create({
+        model: 'gpt-3.5-turbo',
+        messages: body.messages || [{ role: 'user', content: message }],
+        stream: true,
+      });
+
+      const stream = new ReadableStream({
+        async start(controller) {
+          for await (const chunk of completion) {
+            const content = chunk.choices[0]?.delta?.content || '';
+            if (content) {
+              const response = {
+                id: Date.now().toString(),
+                role: 'assistant',
+                content,
+              };
+              controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(response)}\n\n`));
+            }
+          }
+          controller.close();
+        },
+      });
+
+      return new NextResponse(stream, {
+        headers: {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+        },
+      });
+    }
   } catch (error) {
-    return new Response('An error occurred while processing your request', {
-      status: 500,
-    });
+    console.error('API Hatası:', error);
+    return NextResponse.json({ error: 'Sunucu hatası' }, { status: 500 });
   }
 }

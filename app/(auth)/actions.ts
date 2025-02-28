@@ -1,9 +1,7 @@
 'use server';
 
 import { z } from 'zod';
-
-import { createUser, getUser } from '@/lib/db/queries';
-
+import { createUser, getUser } from '@/lib/db/queries'; // getSuggestionsByDocumentId kaldırıldı
 import { signIn } from './auth';
 
 const authFormSchema = z.object({
@@ -36,7 +34,6 @@ export const login = async (
     if (error instanceof z.ZodError) {
       return { status: 'invalid_data' };
     }
-
     return { status: 'failed' };
   }
 };
@@ -61,11 +58,11 @@ export const register = async (
       password: formData.get('password'),
     });
 
-    const [user] = await getUser(validatedData.email);
-
+    const user = await getUser(validatedData.email);
     if (user) {
-      return { status: 'user_exists' } as RegisterActionState;
+      return { status: 'user_exists' };
     }
+
     await createUser(validatedData.email, validatedData.password);
     await signIn('credentials', {
       email: validatedData.email,
@@ -78,7 +75,6 @@ export const register = async (
     if (error instanceof z.ZodError) {
       return { status: 'invalid_data' };
     }
-
     return { status: 'failed' };
   }
 };

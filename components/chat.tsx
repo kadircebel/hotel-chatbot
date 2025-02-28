@@ -48,12 +48,67 @@ export function Chat({
     experimental_throttle: 100,
     sendExtraMessageFields: true,
     generateId: generateUUID,
-    onFinish: () => {
+    onFinish: (message) => {
+      console.log('Yanıt alındı:', message); // API’den gelen son mesaj
+      console.log('Güncel mesajlar:', messages); // Mesaj dizisi
       mutate('/api/history');
     },
     onError: (error) => {
-      toast.error('An error occured, please try again!');
+      console.error('useChat Hatası (Tam Mesaj):', error.message, error.stack);
+      // toast.error('An error occured, please try again!');
     },
+    onResponse: async (response) => {
+      console.log('API Yanıtı Alındı:', response.status, response.statusText);
+    
+      const reader = response.body?.getReader(); // Akışın reader'ını alıyoruz
+      if (!reader) {
+        console.error('Akış başlatılamadı, body yok.');
+        return;
+      }
+    
+      const decoder = new TextDecoder();
+      let text = '';
+    
+      try {
+        // Akıştan gelen veriyi okuyoruz
+        while (true) {
+          const { done, value } = await reader.read();  // Akıştan veriyi okuruz
+          if (done) break;  // Eğer akış tamamlanmışsa döngüyü kırarız
+          text += decoder.decode(value, { stream: true });  // Veriyi çöz ve ekle
+        }
+    
+        console.log('Ham Yanıt:', text); // Tam yanıtı burada görüyorsunuz
+    
+        // Akışı bitirdikten sonra gelen metni işleme
+        const lines = text.split('\n');
+        lines.forEach((line) => {
+          if (line.startsWith('data: ')) {
+            const jsonData = line.slice(6).trim(); // "data: " kısmı çıkarılıyor
+            try {
+              const parsedResponse = JSON.parse(jsonData);
+              console.log('JSON Veri:', parsedResponse);
+    
+              if (parsedResponse.role && parsedResponse.content) {
+                // Mesajları güncelle
+                setMessages((prevMessages) => [
+                  ...prevMessages,
+                  {
+                    id: generateUUID(),
+                    role: parsedResponse.role,
+                    content: parsedResponse.content,
+                  },
+                ]);
+              }
+            } catch (error) {
+              console.error('JSON parsing hatası:', error);
+            }
+          } 
+        });
+      } catch (error) {
+        console.error('Akış okuma hatası:', error);
+      }
+    },
+    
   });
 
   const { data: votes } = useSWR<Array<Vote>>(
@@ -84,6 +139,13 @@ export function Chat({
           isReadonly={isReadonly}
           isArtifactVisible={isArtifactVisible}
         />
+
+        {/* Geçici render testi */}
+        {/* <div>
+          {messages.map((msg) => (
+            <p key={msg.id}>{msg.role}: {msg.content}</p>
+          ))}
+        </div> */}
 
         <form className="flex mx-auto px-4 bg-background pb-4 md:pb-6 gap-2 w-full md:max-w-3xl">
           {!isReadonly && (
