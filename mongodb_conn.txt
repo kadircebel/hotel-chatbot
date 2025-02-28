@@ -2,4 +2,4 @@ MONGODB_URI=mongodb+srv://kadircebel:mZoVn6R0j2grRndy@stock-codes.5jcxn.mongodb.
 
 OPENAI_API_KEY=****
 
-AUTH_SECRET=8zF5kP9mQwRtY7uN2jXvL4bH6aD3cE8g
+AUTH_SECRET=***
