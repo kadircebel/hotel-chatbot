@@ -1,5 +1,5 @@
 MONGODB_URI=mongodb+srv://kadircebel:mZoVn6R0j2grRndy@stock-codes.5jcxn.mongodb.net/?retryWrites=true&w=majority&appName=stock-codes
 
-OPENAI_API_KEY=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
+OPENAI_API_KEY=****
 
 AUTH_SECRET=8zF5kP9mQwRtY7uN2jXvL4bH6aD3cE8g
